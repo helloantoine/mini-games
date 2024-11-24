@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Track Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        .container {
+            position: fixed;
+            inset: 0;
+            background: white;
+        }
+        .instruction {
+            position: absolute;
+            top: 1rem;
+            left: 0;
+            right: 0;
+            text-align: center;
+            color: #4a5568;
+            font-size: 1.125rem;
+            z-index: 10;
+        }
+        canvas {
+            touch-action: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="instruction">Draw a loop to make the train appear</div>
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // State
+        let isDrawing = false;
+        let path = [];
+        let robot = null;
+        let robotProgress = 0;
+        let isDancing = false;
+        let danceFrame = 0;
+        let animationFrameId = null;
+        let progressInterval = null;
+        let danceInterval = null;
+
+        const WAGON_COLORS = ['#EA4F3C', '#34C759', '#AF52DE'];
+        const WAGON_SPACING = 40;
+
+        // Setup
+        function updateCanvasSize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        window.addEventListener('resize', updateCanvasSize);
+        updateCanvasSize();
+
+        // Utility functions
+        function normalizePath(rawPath) {
+            if (rawPath.length < 2) return rawPath;
+            
+            const normalizedPath = [rawPath[0]];
+            const spacing = 10;
+            let currentPoint = rawPath[0];
+            
+            for (let i = 1; i < rawPath.length; i++) {
+                const nextPoint = rawPath[i];
+                const distance = Math.sqrt(
+                    Math.pow(nextPoint.x - currentPoint.x, 2) + 
+                    Math.pow(nextPoint.y - currentPoint.y, 2)
+                );
+                
+                if (distance >= spacing) {
+                    const ratio = spacing / distance;
+                    const newX = currentPoint.x + (nextPoint.x - currentPoint.x) * ratio;
+                    const newY = currentPoint.y + (nextPoint.y - currentPoint.y) * ratio;
+                    normalizedPath.push({ x: newX, y: newY });
+                    currentPoint = { x: newX, y: newY };
+                    i--;
+                }
+            }
+            
+            return normalizedPath;
+        }
+
+        function getCoordinates(e) {
+            const rect = canvas.getBoundingClientRect();
+            const event = e.touches ? e.touches[0] : e;
+            return {
+                x: event.clientX - rect.left,
+                y: event.clientY - rect.top
+            };
+        }
+
+        function drawWagon(ctx, x, y, angle, color, isDancing, danceFrame) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle * Math.PI / 180);
+
+            if (isDancing) {
+                const bounceOffset = Math.sin(danceFrame * 0.5) * 3;
+                ctx.translate(0, bounceOffset);
+                
+                const spinAngle = Math.sin(danceFrame * 0.3) * 10;
+                ctx.rotate(spinAngle * Math.PI / 180);
+            }
+            
+            ctx.fillStyle = color;
+            ctx.fillRect(-12, -8, 24, 16);
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(-8, -5, 6, 4);
+            ctx.fillRect(2, -5, 6, 4);
+            
+            ctx.restore();
+        }
+
+        function drawRobot(ctx, x, y, angle, isDancing, danceFrame) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle * Math.PI / 180);
+
+            if (isDancing) {
+                const bounceOffset = Math.sin(danceFrame * 0.5) * 5;
+                ctx.translate(0, bounceOffset);
+                
+                const spinAngle = Math.sin(danceFrame * 0.3) * 15;
+                ctx.rotate(spinAngle * Math.PI / 180);
+                
+                const scale = 1 + Math.sin(danceFrame * 0.4) * 0.1;
+                ctx.scale(scale, scale);
+            }
+            
+            ctx.fillStyle = '#3182ce';
+            ctx.fillRect(-15, -10, 30, 20);
+            
+            ctx.fillStyle = '#4299e1';
+            ctx.fillRect(-10, -15, 20, 10);
+            
+            ctx.strokeStyle = '#718096';
+            ctx.lineWidth = 2;
+            
+            const antennaWobble = isDancing ? Math.sin(danceFrame * 0.3) * 10 : 0;
+            
+            ctx.beginPath();
+            ctx.moveTo(-8, -15);
+            ctx.lineTo(-12 + antennaWobble, -25);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(8, -15);
+            ctx.lineTo(12 + antennaWobble, -25);
+            ctx.stroke();
+            
+            const eyeScale = isDancing ? (Math.sin(danceFrame * 0.2) > 0.9 ? 0.1 : 1) : 1;
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(-5, -11, 3 * eyeScale, 0, Math.PI * 2);
+            ctx.arc(5, -11, 3 * eyeScale, 0, Math.PI * 2);
+            ctx.fill();
+            
+            const pupilOffset = isDancing ? Math.sin(danceFrame * 0.3) * 1 : 0;
+            ctx.fillStyle = '#000000';
+            ctx.beginPath();
+            ctx.arc(-5 + pupilOffset, -11, 1.5 * eyeScale, 0, Math.PI * 2);
+            ctx.arc(5 + pupilOffset, -11, 1.5 * eyeScale, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.restore();
+        }
+
+        function getPositionAtProgress(progress) {
+            const segment = Math.floor(progress);
+            const segmentProgress = progress - segment;
+            
+            if (segment < path.length - 1) {
+                const currentPoint = path[segment];
+                const nextPoint = path[segment + 1];
+                
+                const x = currentPoint.x + (nextPoint.x - currentPoint.x) * segmentProgress;
+                const y = currentPoint.y + (nextPoint.y - currentPoint.y) * segmentProgress;
+                
+                const angle = Math.atan2(
+                    nextPoint.y - currentPoint.y,
+                    nextPoint.x - currentPoint.x
+                ) * 180 / Math.PI;
+                
+                return { x, y, angle };
+            }
+            return null;
+        }
+
+        // Drawing functions
+        function render() {
+            ctx.strokeStyle = '#4a5568';
+            ctx.lineWidth = 6;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            if (path.length > 1) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Draw railroad ties
+                ctx.beginPath();
+                ctx.lineWidth = 3;
+                const tieLength = 16;
+                
+                for (let i = 0; i < path.length - 1; i++) {
+                    const angle = Math.atan2(
+                        path[i + 1].y - path[i].y,
+                        path[i + 1].x - path[i].x
+                    );
+                    
+                    ctx.moveTo(
+                        path[i].x - Math.sin(angle) * tieLength/2,
+                        path[i].y + Math.cos(angle) * tieLength/2
+                    );
+                    ctx.lineTo(
+                        path[i].x + Math.sin(angle) * tieLength/2,
+                        path[i].y - Math.cos(angle) * tieLength/2
+                    );
+                }
+                ctx.stroke();
+                
+                // Draw rails
+                ctx.lineWidth = 6;
+                const railGap = 6;
+                for (let rail = -1; rail <= 1; rail += 2) {
+                    ctx.beginPath();
+                    for (let i = 0; i < path.length; i++) {
+                        const point = path[i];
+                        const nextPoint = path[i + 1];
+                        
+                        if (i === 0) {
+                            ctx.moveTo(point.x, point.y);
+                        } else {
+                            const angle = Math.atan2(
+                                nextPoint?.y - path[i-1].y,
+                                nextPoint?.x - path[i-1].x
+                            );
+                            
+                            const offsetX = Math.sin(angle) * (railGap/2) * rail;
+                            const offsetY = -Math.cos(angle) * (railGap/2) * rail;
+                            
+                            ctx.lineTo(point.x + offsetX, point.y + offsetY);
+                        }
+                    }
+                    ctx.stroke();
+                }
+                
+                // Draw robot and wagons
+                if (robot && path.length > 2) {
+                    const robotPos = getPositionAtProgress(robotProgress);
+                    if (robotPos) {
+                        drawRobot(ctx, robotPos.x, robotPos.y, robotPos.angle, isDancing, danceFrame);
+                        
+                        for (let i = 0; i < WAGON_COLORS.length; i++) {
+                            const wagonProgress = Math.max(0, robotProgress - (i + 1) * WAGON_SPACING/10);
+                            const wagonPos = getPositionAtProgress(wagonProgress);
+                            if (wagonPos) {
+                                drawWagon(ctx, wagonPos.x, wagonPos.y, wagonPos.angle, WAGON_COLORS[i], isDancing, danceFrame - i * 2);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            animationFrameId = requestAnimationFrame(render);
+        }
+
+        // Event handlers
+        function startDrawing(e) {
+            e.preventDefault();
+            const coords = getCoordinates(e);
+            
+            isDrawing = true;
+            path = [coords];
+            robot = null;
+            isDancing = false;
+            
+            // Clear intervals
+            if (progressInterval) clearInterval(progressInterval);
+            if (danceInterval) clearInterval(danceInterval);
+        }
+
+        function draw(e) {
+            e.preventDefault();
+            if (!isDrawing) return;
+            
+            const coords = getCoordinates(e);
+            path = normalizePath([...path, coords]);
+        }
+
+        function stopDrawing(e) {
+            e.preventDefault();
+            if (!isDrawing) return;
+            
+            isDrawing = false;
+            
+            if (path.length > 10) {
+                const start = path[0];
+                const end = path[path.length - 1];
+                const distance = Math.sqrt(
+                    Math.pow(end.x - start.x, 2) + 
+                    Math.pow(end.y - start.y, 2)
+                );
+                
+                if (distance < 30) {
+                    robot = { x: start.x, y: start.y };
+                    robotProgress = 0;
+                    startAnimation();
+                }
+            }
+        }
+
+        function startAnimation() {
+            // Progress animation
+            progressInterval = setInterval(() => {
+                if (robotProgress >= path.length - 1) {
+                    isDancing = true;
+                    robotProgress = 0;
+                } else {
+                    robotProgress += 0.3;
+                }
+            }, 50);
+
+            // Dance animation
+            danceInterval = setInterval(() => {
+                if (isDancing) {
+                    danceFrame++;
+                }
+            }, 16);
+        }
+
+        // Event listeners
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseleave', stopDrawing);
+        canvas.addEventListener('touchstart', startDrawing);
+        canvas.addEventListener('touchmove', draw);
+        canvas.addEventListener('touchend', stopDrawing);
+        canvas.addEventListener('touchcancel', stopDrawing);
+
+        // Start render loop
+        render();
+    </script>
+</body>
+</html>
