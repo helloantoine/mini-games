@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Particle Donut</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #ffffff;
+      touch-action: none; /* Prevent default touch behaviors */
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="whiteboard"></canvas>
+  <script>
+    const canvas = document.getElementById('whiteboard');
+    const ctx = canvas.getContext('2d');
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let particles = [];
+    let hue = 0;
+    let isMouseDown = false;
+
+    class Particle {
+      constructor(x, y, angle, speed, radius) {
+        this.x = x;
+        this.y = y;
+        this.angle = angle;
+        this.speed = speed;
+        this.radius = radius;
+        this.hue = hue;
+        this.life = 240; // Life in frames (4 seconds at 60fps)
+      }
+
+      update() {
+        if (this.life > 0) {
+          this.x += Math.cos(this.angle) * this.speed;
+          this.y += Math.sin(this.angle) * this.speed;
+          this.speed *= 0.95; // Slow down for ease effect
+          this.hue += 5;
+
+          // Avoid entering the donut hole and aggregate on the outer edge
+          const centerX = canvas.width / 2;
+          const centerY = canvas.height / 2;
+          const distanceToCenter = Math.hypot(this.x - centerX, this.y - centerY);
+          const donutInnerRadius = 80;
+          const donutOuterRadius = 120;
+          const pullStrength = 0.02;
+
+          if (distanceToCenter < donutInnerRadius || distanceToCenter > donutOuterRadius) {
+            const pullAngle = Math.atan2(centerY - this.y, centerX - this.x);
+            const targetRadius = distanceToCenter < donutInnerRadius ? donutInnerRadius : donutOuterRadius;
+            this.x += Math.cos(pullAngle) * pullStrength * (targetRadius - distanceToCenter);
+            this.y += Math.sin(pullAngle) * pullStrength * (targetRadius - distanceToCenter);
+          }
+
+          this.life -= 1;
+        } else {
+          // Move particle away from the donut after life ends
+          const centerX = canvas.width / 2;
+          const centerY = canvas.height / 2;
+          const moveAngle = Math.atan2(this.y - centerY, this.x - centerX);
+          this.x += Math.cos(moveAngle) * 2;
+          this.y += Math.sin(moveAngle) * 2;
+        }
+      }
+
+      draw() {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = `hsl(${this.hue}, 70%, 70%)`; // Pastel colors with reduced saturation and higher lightness
+        ctx.fill();
+      }
+    }
+
+    function createParticles(x, y) {
+      for (let i = 0; i < 10; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 5 + 2;
+        const radius = Math.random() * 5 + 2;
+        particles.push(new Particle(x, y, angle, speed, radius));
+      }
+    }
+
+    function animate() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      particles.forEach((particle, index) => {
+        particle.update();
+        particle.draw();
+
+        // Remove particles far outside the canvas
+        if (particle.x < -100 || particle.x > canvas.width + 100 || particle.y < -100 || particle.y > canvas.height + 100) {
+          particles.splice(index, 1);
+        }
+      });
+
+      hue += 1;
+      requestAnimationFrame(animate);
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      isMouseDown = true;
+      createParticles(e.clientX, e.clientY);
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      isMouseDown = false;
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (isMouseDown) {
+        createParticles(e.clientX, e.clientY);
+      }
+    });
+
+    canvas.addEventListener('touchstart', (e) => {
+      isMouseDown = true;
+      const touch = e.touches[0];
+      createParticles(touch.clientX, touch.clientY);
+      e.preventDefault();
+    });
+
+    canvas.addEventListener('touchend', () => {
+      isMouseDown = false;
+    });
+
+    canvas.addEventListener('touchmove', (e) => {
+      if (isMouseDown) {
+        const touch = e.touches[0];
+        createParticles(touch.clientX, touch.clientY);
+        e.preventDefault();
+      }
+    });
+
+    animate();
+
+    window.addEventListener('resize', () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    });
+  </script>
+</body>
+</html>
